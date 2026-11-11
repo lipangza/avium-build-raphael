@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  机型 : Redmi K20 Pro / Mi 9T Pro (codename: raphael)
+  目标 : AviumUI 16.2 (avium-16.2，基线 lineage-23.2 / Android 16)
+  用法 : 由 workflow 自动 cp 到 .repo/local_manifests/；手工构建见 README.md 第 2 节
+  lunch: lineage_raphael-bp4a-userdebug
+  说明 : remote "github" 由 AviumUI 清单内置（fetch=".."，即 https://github.com/），
+         所以 name 必须写 owner/repo 全名。
+-->
+<manifest>
+
+  <!-- 设备树：LineageOS 官方，lineage-23.2 分支已核实存在 -->
+  <project name="LineageOS/android_device_xiaomi_raphael"
+           path="device/xiaomi/raphael"
+           remote="github" revision="lineage-23.2" />
+
+  <project name="LineageOS/android_device_xiaomi_sm8150-common"
+           path="device/xiaomi/sm8150-common"
+           remote="github" revision="lineage-23.2" />
+
+  <project name="LineageOS/android_kernel_xiaomi_sm8150"
+           path="kernel/xiaomi/sm8150"
+           remote="github" revision="lineage-23.2" />
+
+  <project name="LineageOS/android_hardware_xiaomi"
+           path="hardware/xiaomi"
+           remote="github" revision="lineage-23.2" />
+
+  <!-- vendor blobs（机型级）：TheMuppets 有 lineage-23.2 分支，已核实 -->
+  <project name="TheMuppets/proprietary_vendor_xiaomi_raphael"
+           path="vendor/xiaomi/raphael"
+           remote="github" revision="lineage-23.2" />
+
+  <!--
+    vendor blobs（公共级）：TheMuppets 只到 lineage-22.2，23.2 分支缺失。
+    设备树 msmnile.mk 第 404 行强制 inherit vendor/xiaomi/sm8150-common/sm8150-common-vendor.mk，
+    因此本项不能省略，否则 lunch 阶段直接失败。
+    下面这条是社区镜像的占位默认值（待你确认，见 README 待决策第 3 条）。
+  -->
+  <project name="BayerischeMotorenWerke/proprietary_vendor_xiaomi_sm8150-common"
+           path="vendor/xiaomi/sm8150-common"
+           remote="github" revision="lineage-23.2" />
+
+  <!--
+    备选（同为 lineage-23.2 时代的社区镜像，更新更频繁）：
+    project name="raphael-resources/proprietary_vendor_xiaomi_sm8150-common"
+            path="vendor/xiaomi/sm8150-common" remote="github" revision="16.2"
+  -->
+  <!--
+    GApps（默认随构建生成）：MindTheGapps，Android 16 对应分支 baklava（已核实存在），
+    arm64/arm64-vendor.mk 会把 common/common-vendor.mk 一并 inherit，路径与本项目一致。
+    raphael 设备树本身没有 gapps 行，由 workflow 在 sync 后注入 inherit，见 build.yml 步骤 3b。
+  -->
+  <project name="MindTheGapps/vendor_gapps"
+           path="vendor/gapps"
+           remote="github" revision="baklava" />
+
+</manifest>

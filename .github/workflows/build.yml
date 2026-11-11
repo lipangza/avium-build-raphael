@@ -1,0 +1,180 @@
+name: Build AviumUI (raphael)
+
+# 仓库：avium-build-raphael —— 只构建 raphael（Redmi K20 Pro / Mi 9T Pro）
+# 源码目录固定：$HOME/android/avium-raphael     ccache 固定：$HOME/.ccache-raphael
+# 产物：AviumUI-raphael-<run_number>
+#
+# 可选：给本仓库配专用 runner 时，把第 34 行改成
+#   runs-on: [self-hosted, raphael]
+# 默认不加标签，任何带 self-hosted 标签的机器都能接单。
+on:
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: '删除源码目录后全量重编'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  BRANCH: avium-16.2
+  CCACHE_SIZE: 50G
+  TZ: Asia/Shanghai
+  # 默认开启 GMS：环境变量会作为 make 变量传给 product 配置（无需改设备树）
+  WITH_GMS: "true"
+
+# 同一仓库同时只跑一个构建，避免两次运行抢同一个源码目录
+concurrency:
+  group: avium-raphael
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: AviumUI-raphael
+    runs-on: self-hosted
+    timeout-minutes: 720
+
+    steps:
+      - name: 0. 检出构建仓库
+        uses: actions/checkout@v4
+
+      - name: 1. 环境检查
+        run: |
+          echo "=== 机型: raphael / 主机: $(hostname) ==="
+          uname -a; df -h /; free -h; nproc
+          FREE_GB=$(df / --output=avail -BG | tail -1 | tr -d ' G')
+          echo "可用空间: ${FREE_GB}GB"
+          if [ "$FREE_GB" -lt 350 ]; then
+            echo "::error::可用空间 ${FREE_GB}GB < 350GB，raphael 源码树需要约 350–400GB"
+            exit 1
+          fi
+
+      - name: 2. 清理源码（可选）
+        if: inputs.clean_build
+        run: rm -rf "$HOME/android/avium-raphael"
+
+      - name: 3. 初始化 repo 并注入机型清单
+        run: |
+          set -e
+          SRC_DIR="$HOME/android/avium-raphael"
+          mkdir -p "$SRC_DIR"
+          cd "$SRC_DIR"
+          export PATH=$HOME/bin:$PATH
+          repo init -u https://github.com/AviumUI/android_manifests -b "$BRANCH" --git-lfs
+          mkdir -p .repo/local_manifests
+          cp "$GITHUB_WORKSPACE/local_manifests/raphael.xml" .repo/local_manifests/
+          ls -l .repo/local_manifests/
+
+      - name: 3b. 注入 GMS inherit（raphael 设备树没有 gapps 行）
+        run: |
+          set -e
+          cd "$HOME/android/avium-raphael"
+          F=device/xiaomi/raphael/lineage_raphael.mk
+          L='$(call inherit-product, vendor/gapps/arm64/arm64-vendor.mk)'
+          if [ ! -f "$F" ]; then
+            echo "::error::$F 不存在（上游改名或设备树变更）"; exit 1
+          fi
+          # 幂等：已存在则跳过；repo sync --force-sync 会重置该文件，所以每次构建都补一次
+          grep -qF "vendor/gapps/arm64/arm64-vendor.mk" "$F" || echo "$L" >> "$F"
+          tail -3 "$F"
+
+      - name: 4. 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib \
+            gcc-multilib git git-lfs gnupg gperf imagemagick \
+            protobuf-compiler python3-protobuf lib32readline-dev \
+            lib32z1-dev libdw-dev libelf-dev lz4 libsdl1.2-dev \
+            libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
+            schedtool squashfs-tools xsltproc zip zlib1g-dev python3 aria2
+
+      - name: 5. 安装 repo 工具
+        run: |
+          mkdir -p $HOME/bin
+          if [ ! -f $HOME/bin/repo ]; then
+            curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo > $HOME/bin/repo
+            chmod a+x $HOME/bin/repo
+          fi
+          $HOME/bin/repo --version
+
+      - name: 6. 配置 Git
+        run: |
+          git config --global user.name "minghao680"
+          git config --global user.email "minghao680@users.noreply.github.com"
+          git lfs install
+
+      - name: 7. 配置 ccache
+        run: |
+          export CCACHE_DIR="$HOME/.ccache-raphael"
+          mkdir -p "$CCACHE_DIR"
+          ccache -M ${CCACHE_SIZE}
+          ccache -z
+          ccache -s
+
+      - name: 8. 同步源码
+        run: |
+          set -e
+          cd "$HOME/android/avium-raphael"
+          export PATH=$HOME/bin:$PATH
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --retry-fetches=3
+
+      - name: 9. 验证目录结构
+        run: |
+          set -e
+          cd "$HOME/android/avium-raphael"
+          for d in device/xiaomi/raphael kernel/xiaomi/* vendor/xiaomi/raphael vendor/xiaomi/sm8150-common vendor/gapps; do
+            if [ -d "$d" ]; then echo "OK  $d"; else echo "MISSING $d"; exit 1; fi
+          done
+          echo "=== 编译前磁盘 ==="; df -h /
+
+      - name: 10. 开始编译
+        run: |
+          set -e
+          cd "$HOME/android/avium-raphael"
+          export PATH=$HOME/bin:$PATH
+          export CCACHE_DIR="$HOME/.ccache-raphael"
+          echo "开始编译 AviumUI for raphael on $(hostname) @ $(date '+%F %T')"
+          source build/envsetup.sh
+          breakfast raphael
+          test "$(get_build_var WITH_GMS)" = "true" || { echo "::error::WITH_GMS 未生效，产物将不含 GMS"; exit 1; }
+          brunch raphael userdebug 2>&1 | tee build.log
+
+      - name: 11. 收集产物
+        if: success()
+        run: |
+          cd "$HOME/android/avium-raphael"
+          PRODUCT_DIR="out/target/product/raphael"
+          OUT_DIR="$GITHUB_WORKSPACE/build-output"
+          mkdir -p "$OUT_DIR"
+          cp ${PRODUCT_DIR}/*.zip        "$OUT_DIR"/ 2>/dev/null || true
+          cp ${PRODUCT_DIR}/boot.img     "$OUT_DIR"/ 2>/dev/null || true
+          cp ${PRODUCT_DIR}/dtbo.img     "$OUT_DIR"/ 2>/dev/null || true
+          cp ${PRODUCT_DIR}/vbmeta.img   "$OUT_DIR"/ 2>/dev/null || true
+          cp ${PRODUCT_DIR}/recovery.img "$OUT_DIR"/ 2>/dev/null || true
+          cat > "$OUT_DIR"/build-info.txt <<EOF
+          AviumUI Build Info
+          ==================
+          Device: raphael
+          Branch: ${BRANCH}
+          Build Type: userdebug
+          Build Date: $(date '+%F %T')
+          Runner: $(hostname)
+          EOF
+          ls -lh "$OUT_DIR"
+
+      - name: 12. 上传产物
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AviumUI-raphael-${{ github.run_number }}
+          path: build-output/
+          retention-days: 7
+          compression-level: 1
+
+      - name: 13. 编译统计
+        if: always()
+        run: |
+          cd "$HOME/android/avium-raphael" 2>/dev/null || exit 0
+          [ -f build.log ] && echo "日志大小: $(du -h build.log | cut -f1)" || true
+          CCACHE_DIR="$HOME/.ccache-raphael" ccache -s | grep -E "cache hit|Cache size" || true
